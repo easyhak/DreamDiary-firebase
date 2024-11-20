@@ -207,13 +207,13 @@ exports.needSync = onCall({
     const { list } = request.data;
 
     if (!Array.isArray(list) || list.length === 0) {
-      return { error: "Invalid or empty 'list' in request body" };
+      return { error: "Invalid or empty 'list' in request body", isSuccess: false };
     }
 
     // user id 검증
     const userId = request.auth.uid 
     if(!request.auth.uid) {
-      return { error: "Invalid user" };
+      return { error: "Invalid user", isSuccess: false };
     }
 
     const updatedVersions = [];
@@ -223,7 +223,10 @@ exports.needSync = onCall({
 
       // 필수 필드 검증
       if (!diaryId) {
-        return { error: `Missing required fields for diaryId: ${diaryId}`} ;
+        return {
+           error: `Missing required fields for diaryId: ${diaryId}`,
+           "isSuccess": false
+        };
       }
 
       // 1. 기존 diary 데이터 가져오기
@@ -261,10 +264,15 @@ exports.needSync = onCall({
     }
 
     // 리턴 값으로 업데이트된 버전 배열 반환
-    
-    return {updatedVersions};
+    logger.info("Synced diaries:", updatedVersions);
+    return {
+      updatedVersions, 
+      "isSuccess": true
+    };
   } catch (error) {
-    console.error("Error syncing diaries:", error);
-    return { error: error.message };
+    return { 
+      error: error.message,
+      "isSuccess": false
+    };
   }
 });
