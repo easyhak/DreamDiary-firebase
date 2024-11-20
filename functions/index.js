@@ -20,9 +20,14 @@ exports.helloWorld = onCall({
 
 
 // need synced 는 true인 애들만 보내줌
-exports.sync = onRequest({
+exports.needSync = onRequest({
   region: "asia-northeast3",
 }, async (request, response) => {
+
+  // 1. user가 맞는지 확인
+  // 2. diary id의 데이터를 가져온다.
+  // 3. diary의 id가 없으면 새로 생성
+  // 4. diary의 id가 있으면 주어진 데이터로 업데이트
 
   // list 형태로 firebase 안에 있는 user의 uid 에 맞는 data를 가져온다.
   try {
@@ -73,6 +78,9 @@ exports.sync = onRequest({
   }
 });
 
+
+
+
 // 일기 추가
 exports.addDiary = onRequest({
   region: "asia-northeast3",
@@ -116,31 +124,147 @@ exports.addDiary = onRequest({
   }
 });
 
-// user의 일기를 가져오기
-exports.getUserDiaries = onRequest({
+
+// 일기 needSync는 true인것만 동기화
+exports.syncDiaries = onRequest({
   region: "asia-northeast3",
 }, async (request, response) => {
   try {
-    const { userId } = request.body;
+    const { list } = request.body;
 
-    if (!userId) {
-      response.status(400).send({ error: "Missing required field: userId" });
+    if (!Array.isArray(list) || list.length === 0) {
+      response.status(400).send({ error: "Invalid or empty 'list' in request body" });
       return;
     }
 
-    const snapshot = await firestore.collection("diaries")
-      .where("userId", "==", userId)
-      .get();
+    const updatedVersions = [];
 
-    if (snapshot.empty) {
-      response.status(404).send({ error: "No diaries found for this user" });
-      return;
+    for (const diary of list) {
+      const { userId, diaryId, createdAt, updatedAt, sleepStartAt, sleepEndAt, labels, version } = diary;
+
+      // 필수 필드 검증
+      if (!userId || !diaryId) {
+        response.status(400).send({ error: `Missing required fields for diaryId: ${diaryId}` });
+        return;
+      }
+
+      // 1. 사용자 존재 여부 확인
+      // const userDoc = await firestore.collection("users").doc(userId).get();
+      // if (!userDoc.exists) {
+      //   response.status(404).send({ error: `User ${userId} does not exist` });
+      //   return;
+      // }
+
+      // 2. 기존 diary 데이터 가져오기
+      const diaryRef = firestore.collection("users").doc(userId).collection("diaries").doc(diaryId);
+      const diaryDoc = await diaryRef.get();
+
+      let newVersion = Date.now(); // version 업데이트: epoch time 사용
+
+      if (diaryDoc.exists) {
+        // 2-1. 기존 데이터 업데이트
+        await diaryRef.update({
+          updatedAt,
+          sleepStartAt,
+          sleepEndAt,
+          labels,
+          version: newVersion, // 새 버전으로 업데이트
+        });
+      } else {
+        // 2-2. 새로운 데이터 생성
+        await diaryRef.set({
+          diaryId,
+          userId,
+          createdAt,
+          updatedAt,
+          sleepStartAt,
+          sleepEndAt,
+          labels,
+          version: newVersion, // 새 버전 설정
+        });
+      }
+
+      // 3. 업데이트된 version 기록
+      updatedVersions.push({ diaryId, version: newVersion });
     }
 
-    const diaries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    response.status(200).send({ data: diaries });
+    // 리턴 값으로 업데이트된 버전 배열 반환
+    response.status(200).send({ updatedVersions });
   } catch (error) {
-    console.error("Error fetching diaries:", error);
+    console.error("Error syncing diaries:", error);
     response.status(500).send({ error: error.message });
+  }
+});
+
+// 일기 needSync는 true인것만 동기화
+exports.needSync = onCall({
+  region: "asia-northeast3",
+}, async (request, response) => {
+
+  logger.info(request.data)
+
+  try {
+    const { list } = request.data;
+
+    if (!Array.isArray(list) || list.length === 0) {
+      return { error: "Invalid or empty 'list' in request body" };
+    }
+
+    // user id 검증
+    const userId = request.auth.uid 
+    if(!request.auth.uid) {
+      return { error: "Invalid user" };
+    }
+
+    const updatedVersions = [];
+
+    for (const diary of list) {
+      const {diaryId, createdAt, updatedAt, sleepStartAt, sleepEndAt, labels, version } = diary;
+
+      // 필수 필드 검증
+      if (!diaryId) {
+        return { error: `Missing required fields for diaryId: ${diaryId}`} ;
+      }
+
+      // 1. 기존 diary 데이터 가져오기
+      const diaryRef = firestore.collection("users").doc(userId).collection("diaries").doc(diaryId);
+      const diaryDoc = await diaryRef.get();
+
+      // version 업데이트: epoch time 사용
+      let newVersion = Date.now(); 
+
+      if (diaryDoc.exists) {
+        // 1-1. 기존 데이터 업데이트
+        await diaryRef.update({
+          updatedAt,
+          sleepStartAt,
+          sleepEndAt,
+          labels,
+          version: newVersion,
+        });
+      } else {
+        // 1-2. 새로운 데이터 생성
+        await diaryRef.set({
+          diaryId,
+          userId,
+          createdAt,
+          updatedAt,
+          sleepStartAt,
+          sleepEndAt,
+          labels,
+          version: newVersion,
+        });
+      }
+
+      // 3. 업데이트된 version 기록
+      updatedVersions.push({ diaryId, version: newVersion });
+    }
+
+    // 리턴 값으로 업데이트된 버전 배열 반환
+    
+    return {updatedVersions};
+  } catch (error) {
+    console.error("Error syncing diaries:", error);
+    return { error: error.message };
   }
 });
