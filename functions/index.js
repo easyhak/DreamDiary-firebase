@@ -196,7 +196,75 @@ exports.syncDiaries = onRequest({
   }
 });
 
-// 일기 needSync는 true인것만 동기화
+// 클라이언트의 모든 꿈일기 버전 정보를 가져와서 비교
+exports.version = onCall({
+  region: "asia-northeast3",
+}, async (request, response) => {
+
+  logger.info(request.data)
+
+  try {
+    const { list } = request.data;
+
+    if (!Array.isArray(list) || list.length === 0) {
+      return { error: "Invalid or empty 'list' in request body", isSuccess: false };
+    }
+
+    // user id 검증
+    const userId = request.auth.uid 
+    if(!request.auth.uid) {
+      return { error: "Invalid user", isSuccess: false };
+    }
+
+    // TODO: 이름
+    const diaries = []
+
+    for (const diary of list) {
+      const {diaryId, version: prevVersion } = diary;
+      
+
+      // 필수 필드 검증
+      if (!diaryId) {
+        return {
+           error: `Missing required fields for diaryId: ${diaryId}`,
+           "isSuccess": false
+        };
+      }
+
+      // 1. 기존 diary 데이터 가져오기
+      const diaryRef = firestore.collection("users").doc(userId).collection("diaries").doc(diaryId);
+      const diaryDoc = await diaryRef.get();
+
+      // 2. 존재하는지 확인하기
+      if (diaryDoc.exists) {
+        const diaryData = diaryDoc.data();
+        
+        const { diaryId, title, createdAt, updatedAt, sleepStartAt, sleepEndAt, labels, version } = diaryData;
+
+        // 3. 파이어스토어에 있는 꿈일기가 더 최신 버전인 경우 클라이언트에게 알려주기
+        if (prevVersion < version) {
+          diaries.push(
+            {
+              diaryId, title, createdAt, updatedAt, sleepStartAt, sleepEndAt, labels, version 
+            }
+          )
+        }
+      }
+    }
+
+    return {
+      diaries, 
+      isSuccess: true
+    };
+
+  } catch (error) {
+    return { 
+      error: error.message,
+      "isSuccess": false
+    };
+  }
+});
+
 exports.needSync = onCall({
   region: "asia-northeast3",
 }, async (request, response) => {
@@ -219,7 +287,7 @@ exports.needSync = onCall({
     const updatedVersions = [];
 
     for (const diary of list) {
-      const {diaryId, createdAt, updatedAt, sleepStartAt, sleepEndAt, labels, version } = diary;
+      const {diaryId, title, createdAt, updatedAt, sleepStartAt, sleepEndAt, labels, version } = diary;
 
       // 필수 필드 검증
       if (!diaryId) {
@@ -239,6 +307,7 @@ exports.needSync = onCall({
       if (diaryDoc.exists) {
         // 1-1. 기존 데이터 업데이트
         await diaryRef.update({
+          title,
           updatedAt,
           sleepStartAt,
           sleepEndAt,
@@ -250,6 +319,7 @@ exports.needSync = onCall({
         await diaryRef.set({
           diaryId,
           userId,
+          title,
           createdAt,
           updatedAt,
           sleepStartAt,
