@@ -428,13 +428,16 @@ exports.versionCheck = onCall({
     // 존재하는지 확인하기
     if (serverDiaries.exists) {
       const serverDiaryData = serverDiaries.data();
+      const localDiaryMap = {};
       const serverDiaryMap = {};
+
       for (const serverDiary of serverDiaryData) {
         serverDiaryMap[serverDiary.diaryId] = serverDiary;
       }
 
       for (const diary of list) {
         const {diaryId, version} = diary;
+        localDiaryMap[diaryId] = diary;
         const serverDiary = serverDiaryMap[diaryId]
 
         // server에 존재하는 경우
@@ -446,17 +449,19 @@ exports.versionCheck = onCall({
             needSyncDiaries.push(diaryId);
           }
         }
-        // server에 존재하지 않는 경우
-        else {
+      } 
+      // 서버에만 존재하는 일기 처리
+      for (const diaryId in serverDiaryMap) {
+        if (!localDiaryMap[diaryId]) {
           needSyncDiaries.push(diaryId);
         }
       }
-      return {
-        needSyncDiaries,
-        isSuccess: true
-      }
     }
-    
+
+    return {
+      needSyncDiaries,
+      isSuccess: true
+    }
 
   } catch (error){
     return {
