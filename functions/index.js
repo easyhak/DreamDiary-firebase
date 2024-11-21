@@ -428,15 +428,27 @@ exports.versionCheck = onCall({
     // 존재하는지 확인하기
     if (serverDiaries.exists) {
       const serverDiaryData = serverDiaries.data();
-      // 이중 for loop를 돌면서 diary 비교하기
+      const serverDiaryMap = {};
       for (const serverDiary of serverDiaryData) {
-        for (const diary of list) {
-          const { diaryId, version } = diary;
-          if (serverDiary.diaryId === diaryId) {
-            if (serverDiary.version !== version) {
-              needSyncDiaries.push(diaryId)
-            }
+        serverDiaryMap[serverDiary.diaryId] = serverDiary;
+      }
+
+      for (const diary of list) {
+        const {diaryId, version} = diary;
+        const serverDiary = serverDiaryMap[diaryId]
+
+        // server에 존재하는 경우
+        if (serverDiary) {
+          const serverVersionList = serverDiary.versionList;
+          const serverLatestVersion = serverVersionList[serverVersionList.length - 1];
+    
+          if (serverLatestVersion !== version) {
+            needSyncDiaries.push(diaryId);
           }
+        }
+        // server에 존재하지 않는 경우
+        else {
+          needSyncDiaries.push(diaryId);
         }
       }
       return {
