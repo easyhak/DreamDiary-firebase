@@ -4,6 +4,7 @@ const {onCall, onRequest} = require("firebase-functions/v2/https");
 const {initializeApp} = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
 const { auth } = require("firebase-admin");
+const { randomUUID } = require('crypto');
 
 initializeApp();
 
@@ -265,6 +266,7 @@ exports.version = onCall({
   }
 });
 
+// needSync는 true 인것만 확인하기
 exports.needSync = onCall({
   region: "asia-northeast3",
 }, async (request, response) => {
@@ -272,7 +274,16 @@ exports.needSync = onCall({
   logger.info(request.data)
 
   try {
-    const { list } = request.data;
+    const { 
+      createdAt,
+      updatedAt,
+      sleepStartAt,
+      sleepEndAt,
+      labels,
+      content,
+      previousVersion,
+      currentVersion
+    } = request.data;
 
     if (!Array.isArray(list) || list.length === 0) {
       return { error: "Invalid or empty 'list' in request body", isSuccess: false };
@@ -283,63 +294,80 @@ exports.needSync = onCall({
     if(!request.auth.uid) {
       return { error: "Invalid user", isSuccess: false };
     }
+    // 필수 필드 검증
+    if (!diaryId) {
+      return {
+        error: `Missing required fields for diaryId: ${diaryId}`,
+        "isSuccess": false
+     };
+    }
 
-    const updatedVersions = [];
+    // 1. 기존 diary 데이터 가져오기
+    const diaryRef = firestore.collection("users").doc(userId).collection("diaries").doc(diaryId);
+    const diaryDoc = await diaryRef.get();
 
-    for (const diary of list) {
-      const {diaryId, title, createdAt, updatedAt, sleepStartAt, sleepEndAt, labels, version } = diary;
+    // 2. 존재하는지 확인하기
+    if (diaryDoc.exists) {
+      const serverDiaryData = diaryDoc.data();
 
-      // 필수 필드 검증
-      if (!diaryId) {
-        return {
-           error: `Missing required fields for diaryId: ${diaryId}`,
-           "isSuccess": false
-        };
-      }
-
-      // 1. 기존 diary 데이터 가져오기
-      const diaryRef = firestore.collection("users").doc(userId).collection("diaries").doc(diaryId);
-      const diaryDoc = await diaryRef.get();
-
-      // version 업데이트: epoch time 사용
-      let newVersion = Date.now(); 
-
-      if (diaryDoc.exists) {
-        // 1-1. 기존 데이터 업데이트
+      // 만약 previousVersion이 server에서의 가장 최신이면 바로 그냥 update
+      if (previousVersion === serverDiaryData.versionList[versionList.length - 1]) {
         await diaryRef.update({
           title,
           updatedAt,
           sleepStartAt,
           sleepEndAt,
           labels,
-          version: newVersion,
+          content,
+          versionList: [...versionList, currentVersion]
         });
+
+        return {
+          currentVersion,
+          "isSuccess": true
+        };
       } else {
-        // 1-2. 새로운 데이터 생성
-        await diaryRef.set({
-          diaryId,
-          userId,
-          title,
-          createdAt,
-          updatedAt,
-          sleepStartAt,
-          sleepEndAt,
-          labels,
-          version: newVersion,
+        const newVersion = randomUUID();
+        
+        // 충돌 난 경우 더하기
+        await diaryRef.update({
+          title: title + serverDiaryData.title,
+          updatedAt: updatedAt,
+          sleepStartAt: sleepStartAt,
+          sleepEndAt: sleepEndAt,
+          labels: [...labels , ...serverDiaryData.labels],
+          content: content + serverDiaryData.content,
+          versionList: [...versionList, currentVersion, newVersion]
         });
+
+        return {
+          newVersion,
+          "isSuccess": true
+        }
       }
-
-      // 3. 업데이트된 version 기록
-      updatedVersions.push({ diaryId, version: newVersion });
     }
-
-    // 리턴 값으로 업데이트된 버전 배열 반환
-    logger.info("Synced diaries:", updatedVersions);
-    return {
-      updatedVersions, 
-      "isSuccess": true
-    };
-  } catch (error) {
+    
+    // 서버에 데이터가 없는 경우
+    else {
+      // 그냥 add 해주기
+      await diaryRef.set({
+        diaryId,
+        title,
+        createdAt,
+        updatedAt,
+        sleepStartAt,
+        sleepEndAt,
+        labels,
+        content,
+        versionList: [previousVersion, currentVersion]
+      });
+      return {
+        currentVersion,
+        "isSuccess": true
+      };
+      
+    }
+} catch(error){
     return { 
       error: error.message,
       "isSuccess": false
