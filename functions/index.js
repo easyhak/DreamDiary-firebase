@@ -274,7 +274,9 @@ exports.needSync = onCall({
   logger.info(request.data)
 
   try {
-    const { 
+    const {
+      diaryId,
+      title,
       createdAt,
       updatedAt,
       sleepStartAt,
@@ -285,12 +287,8 @@ exports.needSync = onCall({
       currentVersion
     } = request.data;
 
-    if (!Array.isArray(list) || list.length === 0) {
-      return { error: "Invalid or empty 'list' in request body", isSuccess: false };
-    }
-
     // user id 검증
-    const userId = request.auth.uid 
+    const userId = request.auth.uid
     if(!request.auth.uid) {
       return { error: "Invalid user", isSuccess: false };
     }
@@ -309,9 +307,12 @@ exports.needSync = onCall({
     // 2. 존재하는지 확인하기
     if (diaryDoc.exists) {
       const serverDiaryData = diaryDoc.data();
+      const { versionList } = serverDiaryData;
 
       // 만약 previousVersion이 server에서의 가장 최신이면 바로 그냥 update
-      if (previousVersion === serverDiaryData.versionList[versionList.length - 1]) {
+      // 클라이언트에서만 새로운 꿈일기가 생겼을 때 상황임.
+      const lastServerVersion = versionList[versionList.length - 1]
+      if (previousVersion === lastServerVersion) {
         await diaryRef.update({
           title,
           updatedAt,
@@ -327,22 +328,42 @@ exports.needSync = onCall({
           "isSuccess": true
         };
       } else {
-        const newVersion = randomUUID();
-        
-        // 충돌 난 경우 더하기
-        await diaryRef.update({
-          title: title + serverDiaryData.title,
-          updatedAt: updatedAt,
-          sleepStartAt: sleepStartAt,
-          sleepEndAt: sleepEndAt,
-          labels: [...labels , ...serverDiaryData.labels],
-          content: content + serverDiaryData.content,
-          versionList: [...versionList, currentVersion, newVersion]
-        });
+        if (versionList.indexOf(currentVersion)) {
+          // 만약 클라이언트의 currentVersion이 서버의 versionList에 속한 경우 해당 클라이언트는 구버전의 데이터를 들고 있음
+          // 그러므로 서버의 꿈일기만을 클라이언트에게 전달함
+          const {
+            createdAt, labels, sleepEndAt, sleepStartAt, title, updatedAt, content
+          } = serverDiaryData;
 
-        return {
-          newVersion,
-          "isSuccess": true
+          const responseDiary = {  createdAt, labels, sleepEndAt, sleepStartAt, title, updatedAt, content }
+          return {
+            currentVersion: lastServerVersion,
+            updateDiary: responseDiary,
+            "isSuccess": true,
+          }
+
+        } else {
+          // 항상 충돌 상황인가??
+
+          // 충돌 난 경우 더하기
+          const newVersion = randomUUID();
+
+          const newDiary = {
+            title: title + serverDiaryData.title,
+            labels: [...labels , ...serverDiaryData.labels],
+            content: content + serverDiaryData.content,
+          }
+
+          await diaryRef.update({
+            ...newDiary,
+            versionList: [...versionList, currentVersion, newVersion] // 클라이언트가 전달한 currentVersion이 merge가 된 느낌
+          });
+
+          return {
+            currentVersion: newVersion,
+            newDiary: newDiary,
+            "isSuccess": true
+          }
         }
       }
     }
