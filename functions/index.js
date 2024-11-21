@@ -395,3 +395,60 @@ exports.needSync = onCall({
     };
   }
 });
+
+// 버전 함수 -> 버전 정보만 비교하기
+// 클라이언트의 current version이 서버의 마지막 version이랑 다르면 무조건 동기화를 진행을 해야 함 -> 
+// 마지막 server version이랑 클라이언트가 보내주는 current version이 다르면 diary Id를 보내주고
+// 클라이언트가 보내준 diary id 중에 서버에만 있으면 diary id만 보내주기
+
+exports.versionCheck = onCall({
+  region: "asia-northeast3",
+}, async (request, response) => {
+  logger.info(request.data)
+  try {
+    const { list } = request.data;
+
+    if (!Array.isArray(list) || list.length === 0) {
+      return { error: "Invalid or empty 'list' in request body", isSuccess: false };
+    }
+
+    // user id 검증
+    const userId = request.auth.uid
+    if(!request.auth.uid) {
+      return { error: "Invalid user", isSuccess: false };
+    }
+
+    // userId 에 맞는 모든 diaries 가져오기
+    const snapshot = await firestore.collection("users").doc(userId).collection("diaries").get();
+    const serverDiaries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    // 동기화해야하는 diaries list
+    const needSyncDiaries = []
+
+    // 존재하는지 확인하기
+    if (serverDiaries.exists) {
+      const serverDiaryData = serverDiaries.data();
+      // 이중 for loop를 돌면서 diary 비교하기
+      for (const serverDiary of serverDiaryData) {
+        for (const diary of list) {
+          const { diaryId, version } = diary;
+          if (serverDiary.diaryId === diaryId) {
+            if (serverDiary.version !== version) {
+              needSyncDiaries.push(diaryId)
+            }
+          }
+        }
+      }
+      return {
+        needSyncDiaries,
+        isSuccess: true
+      }
+    }
+    
+
+  } catch (error){
+    return {
+      isSuccess: false
+    }
+  }
+});
