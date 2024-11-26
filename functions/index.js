@@ -197,6 +197,128 @@ exports.syncDiaries = onRequest({
   }
 });
 
+exports.uploadText = onCall({
+  region: "asia-northeast3",
+}, async (request) => {
+  try {
+    // user id 검증
+    const userId = request.auth.uid
+    if(!request.auth.uid) {
+      return { error: "Invalid user", isSuccess: false };
+    }
+
+    const { id, text } = request.data;
+
+    firestore.collection("users").doc(userId).collection("text").doc(id)
+      .set({
+        id,
+        text
+      });
+
+    return {
+      isSuccess: true,
+    }
+  } catch (e) {
+    return {
+      isSuccess: false,
+    }
+  }
+});
+
+exports.downloadText = onCall({
+  region: "asia-northeast3",
+}, async (request) => {
+  try {
+    // user id 검증
+    const userId = request.auth.uid
+    if(!request.auth.uid) {
+      return { error: "Invalid user", isSuccess: false };
+    }
+
+    const { id } = request.data;
+
+    const doc = await firestore.collection("users").doc(userId).collection("text").doc(id).get();
+    if (doc.exists) {
+      const textData = doc.data();
+
+      return {
+        id: textData.id,
+        text: textData.text,
+        isSuccess: true
+      }
+    }
+
+    return {
+      isSuccess: true,
+    }
+  } catch (e) {
+    return {
+      isSuccess: false,
+    }
+  }
+});
+
+exports.uploadImage = onCall({
+  region: "asia-northeast3",
+}, async (request) => {
+  try {
+    // user id 검증
+    const userId = request.auth.uid
+    if(!request.auth.uid) {
+      return { error: "Invalid user", isSuccess: false };
+    }
+
+    const { id, path } = request.data;
+
+    firestore.collection("users").doc(userId).collection("image").doc(id)
+      .set({
+        id,
+        path
+      });
+
+    return {
+      isSuccess: true,
+    }
+  } catch (e) {
+    return {
+      isSuccess: false,
+    }
+  }
+});
+
+exports.downloadImage = onCall({
+  region: "asia-northeast3",
+}, async (request) => {
+  try {
+    // user id 검증
+    const userId = request.auth.uid
+    if(!request.auth.uid) {
+      return { error: "Invalid user", isSuccess: false };
+    }
+
+    const { id } = request.data;
+
+    const doc = await firestore.collection("users").doc(userId).collection("image").doc(id).get();
+    if (doc.exists) {
+      const imageData = doc.data();
+
+      return {
+        id: imageData.id,
+        path: imageData.path,
+        isSuccess: true
+      }
+    }
+
+    return {
+      isSuccess: true,
+    }
+  } catch (e) {
+    return {
+      isSuccess: false,
+    }
+  }
+});
+
 // 클라이언트의 모든 꿈일기 버전 정보를 가져와서 비교
 exports.version = onCall({
   region: "asia-northeast3",
@@ -284,7 +406,8 @@ exports.needSync = onCall({
       labels,
       content,
       previousVersion,
-      currentVersion
+      currentVersion,
+      deletedAt,
     } = request.data;
 
     // user id 검증
@@ -309,9 +432,36 @@ exports.needSync = onCall({
       const serverDiaryData = diaryDoc.data();
       const { versionList } = serverDiaryData;
 
+      
+      const lastServerVersion = versionList[versionList.length - 1]
+
+      // 서버쪽에서 이미 삭제된 꿈일기면 바로 삭제하라고 알려주기
+      if (serverDiaryData.deletedAt) {
+        return {
+          isSuccess: true,
+          currentVersion: lastServerVersion,
+          deletedDiary: {
+            deleted: true
+          }
+        }
+      } else if (deletedAt) {
+        // 클라이언트가 꿈일기를 삭제한 경우 충돌 처리 없이 그냥 무조건 삭제
+        await diaryRef.update({
+          deletedAt: deletedAt,
+          versionList: [...versionList, currentVersion],
+        });
+
+        return {
+          isSuccess: true,
+          currentVersion: lastServerVersion,
+          deletedDiary: {
+            deleted: true
+          }
+        }
+      }
+
       // 만약 previousVersion이 server에서의 가장 최신이면 바로 그냥 update
       // 클라이언트에서만 새로운 꿈일기가 생겼을 때 상황임.
-      const lastServerVersion = versionList[versionList.length - 1]
       if (previousVersion === lastServerVersion) {
         await diaryRef.update({
           title,
@@ -352,6 +502,10 @@ exports.needSync = onCall({
             title: title + serverDiaryData.title,
             labels: [...labels , ...serverDiaryData.labels],
             content: content + serverDiaryData.content,
+            sleepStartAt: serverDiaryData.sleepStartAt,
+            sleepEndAt: serverDiaryData.sleepEndAt,
+            createdAt: serverDiaryData.createdAt,
+            updatedAt: serverDiaryData.updatedAt
           }
 
           await diaryRef.update({
@@ -370,6 +524,17 @@ exports.needSync = onCall({
     
     // 서버에 데이터가 없는 경우
     else {
+      // 서버에 데이터가 없으니, 클라이언트가 삭제 정보를 올리더라도 굳이 쓸 필요가 없음
+      if (deletedAt) {
+        return {
+          isSuccess: true,
+          currentVersion: currentVersion,
+          deletedDiary : {
+            deleted: true
+          }
+        }
+      }
+
       // 그냥 add 해주기
       await diaryRef.set({
         diaryId,
@@ -380,7 +545,7 @@ exports.needSync = onCall({
         sleepEndAt,
         labels,
         content,
-        versionList: [previousVersion, currentVersion]
+        versionList: ["init", previousVersion, currentVersion]
       });
       return {
         currentVersion,
@@ -408,8 +573,8 @@ exports.versionCheck = onCall({
   try {
     const { list } = request.data;
 
-    if (!Array.isArray(list) || list.length === 0) {
-      return { error: "Invalid or empty 'list' in request body", isSuccess: false };
+    if (!Array.isArray(list)) {
+      return { error: "Invalid 'list' in request body", isSuccess: false };
     }
 
     // user id 검증
@@ -423,11 +588,13 @@ exports.versionCheck = onCall({
     const serverDiaries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
     // 동기화해야하는 diaries list
-    const needSyncDiaries = []
+    const needSyncDiaries = [];
+    const serverOnlyDiaries = [];
 
     // 존재하는지 확인하기
-    if (serverDiaries.exists) {
-      const serverDiaryData = serverDiaries.data();
+    if (serverDiaries.length > 0) {
+
+      const serverDiaryData = serverDiaries;
       const localDiaryMap = {};
       const serverDiaryMap = {};
 
@@ -438,10 +605,12 @@ exports.versionCheck = onCall({
       for (const diary of list) {
         const {diaryId, version} = diary;
         localDiaryMap[diaryId] = diary;
-        const serverDiary = serverDiaryMap[diaryId]
+        const serverDiary = serverDiaryMap[diaryId];
 
         // server에 존재하는 경우
         if (serverDiary) {
+          delete serverDiaryMap[diaryId]
+
           const serverVersionList = serverDiary.versionList;
           const serverLatestVersion = serverVersionList[serverVersionList.length - 1];
     
@@ -449,22 +618,26 @@ exports.versionCheck = onCall({
             needSyncDiaries.push(diaryId);
           }
         }
-      } 
-      // 서버에만 존재하는 일기 처리
-      for (const diaryId in serverDiaryMap) {
-        if (!localDiaryMap[diaryId]) {
-          needSyncDiaries.push(diaryId);
+      }
+
+      // 클라엔 없고 서버에만 있는 경우
+      for (const id of Object.keys(serverDiaryMap)) {
+        // 클라엔 없는데 서버측에 삭제되어 있으면 서버가 클라에게 굳이 알려줄 필요 없음
+        if (!serverDiaryMap[id].deletedAt) {
+          serverOnlyDiaries.push(id);
         }
       }
     }
 
     return {
       needSyncDiaries,
+      serverOnlyDiaries,
       isSuccess: true
     }
 
   } catch (error){
     return {
+      error: error.message,
       isSuccess: false
     }
   }
