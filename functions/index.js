@@ -1,23 +1,13 @@
 // The Cloud Functions for Firebase SDK to create Cloud Functions and triggers.
 const {logger} = require("firebase-functions");
 const {onCall, onRequest} = require("firebase-functions/v2/https");
-const {initializeApp} = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
-const { auth } = require("firebase-admin");
+const { initializeApp } = require("firebase-admin/app");
+const admin = require("firebase-admin");
 const { randomUUID } = require('crypto');
-
 initializeApp();
 
 const firestore = getFirestore();
-
-exports.helloWorld = onCall({
-  region: "asia-northeast3",
-}, (request) => {
-  logger.info(request.auth.uid);
-  logger.info(request)
-  logger.info("Hello logs!", { structuredData: true });
-  return "Hello from Firebase!";
-});
 
 
 // need synced 는 true인 애들만 보내줌
@@ -640,5 +630,33 @@ exports.versionCheck = onCall({
       error: error.message,
       isSuccess: false
     }
+  }
+});
+
+exports.sendNotification = onCall({
+  region: "asia-northeast3",
+}, async (request) => {
+  logger.info(admin)
+  const { token, title, body } = request.data;
+
+  const message = {
+    notification: {
+      title,
+      body
+    },
+    token
+  };
+
+  try {
+    await admin.messaging().send(message);
+    logger.info("Notification sent successfully");
+    return {
+      isSuccess: true
+    };
+  } catch (error) {
+    logger.error("Error sending notification:", error);
+    return {
+      isSuccess: false
+    };
   }
 });
